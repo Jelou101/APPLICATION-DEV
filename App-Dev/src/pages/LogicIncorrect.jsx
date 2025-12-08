@@ -6,12 +6,14 @@ const LogicIncorrect = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // Update this line (around line 15):
   const {
     answer = "N/A",
     explanation = "No explanation available.",
     score = 0,
     question = "",
     hintCount = 0,
+    pointsChange = "-5 points" // ADD THIS LINE
   } = location.state || {};
 
   const handleTryAgain = () => {
@@ -59,6 +61,19 @@ const LogicIncorrect = () => {
                 Incorrect! ❌
               </h1>
               <p className="text-gray-300 mt-2">Better luck next time!</p>
+            
+              {/* ADD THIS NEW SECTION FOR POINTS */}
+              <div className="mt-4">
+                <div className="inline-block px-6 py-3 bg-gradient-to-r from-red-900/30 to-red-800/20 rounded-xl border border-red-500/30">
+                  <div className="flex items-center gap-3">
+                    <span className="text-red-300 text-2xl">⚠️</span>
+                    <div className="text-left">
+                    <div className="text-red-300 font-bold text-xl">{pointsChange || '-5 Points'}</div>
+                      <div className="text-red-200 text-sm">Deducted from your total</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Stats */}

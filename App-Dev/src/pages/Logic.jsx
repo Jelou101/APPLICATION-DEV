@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import LogicHeader from "../components/LogicHeader";
+import { usePoints } from "../hooks/usePoints"; // CHANGE: Import usePoints instead of pointsManager
 
 const Logic = () => {
-  const MAX_HINTS = 5;
   const [question, setQuestion] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -13,23 +13,42 @@ const Logic = () => {
   const [userAnswer, setUserAnswer] = useState("");
   const [score, setScore] = useState(0);
   const [saveStatus, setSaveStatus] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false); // ADD: isSubmitting state
+  
+  // ADD: Import usePoints methods
+  const { addGamePoints, deductPoints } = usePoints();
 
   const navigate = useNavigate();
   const API_BASE = import.meta.env.VITE_API_URL || "";
 
-  // Load saved progress
+  // Get current user ID
+  const getUserId = () => {
+    return localStorage.getItem('userId');
+  };
+
+  // Get user-scoped localStorage key
+  const getStorageKey = () => {
+    const userId = getUserId();
+    return userId ? `logicProgress_${userId}` : 'logicProgress_guest';
+  };
+
+  // Load saved progress on mount
   useEffect(() => {
     loadProgress();
   }, []);
 
+  // Load user progress from localStorage WITH USER SCOPE
   const loadProgress = async () => {
     try {
-      const saved = localStorage.getItem('logicProgress');
+      const storageKey = getStorageKey();
+      const saved = localStorage.getItem(storageKey);
+      
       if (saved) {
         const progress = JSON.parse(saved);
         setScore(progress.score || 0);
         setHintCount(progress.hintCount || 0);
         
+        // If there's a saved current question, load it
         if (progress.currentQuestion) {
           setQuestion(progress.currentQuestion);
         } else {
@@ -44,15 +63,20 @@ const Logic = () => {
     }
   };
 
+  // Save progress to localStorage WITH USER SCOPE
   const saveProgress = (currentQuestion = null) => {
     try {
       const progress = {
         score,
         hintCount,
         currentQuestion,
-        lastSaved: new Date().toISOString()
+        lastSaved: new Date().toISOString(),
+        userId: getUserId() || 'guest'
       };
-      localStorage.setItem('logicProgress', JSON.stringify(progress));
+      
+      const storageKey = getStorageKey();
+      localStorage.setItem(storageKey, JSON.stringify(progress));
+      
       setSaveStatus("Progress saved! 💾");
       setTimeout(() => setSaveStatus(""), 2000);
     } catch (error) {
@@ -83,31 +107,57 @@ const Logic = () => {
     }
   };
 
-  const handleShowHint = () => {
+  // UPDATE: handleShowHint to use usePoints hook
+  const handleShowHint = async () => {
     if (hintUsedThisQuestion) {
       setError("You already used a hint on this question!");
       return;
     }
 
-    if (hintCount >= MAX_HINTS) {
-      setError(`Hint limit reached (${MAX_HINTS}).`);
-      return;
-    }
 
-    setError(null);
-    setShowHint(true);
-    setHintUsedThisQuestion(true);
-    const newHintCount = hintCount + 1;
-    setHintCount(newHintCount);
-    
-    saveProgress(question);
+    try {
+      // DEDUCT POINTS FOR USING HINT
+      const hintCost = 3;
+      await deductPoints(hintCost);
+
+      setError(null);
+      setShowHint(true);
+      setHintUsedThisQuestion(true);
+      const newHintCount = hintCount + 1;
+      setHintCount(newHintCount);
+      
+      saveProgress(question);
+    } catch (error) {
+      setError("Failed to deduct points for hint. Please try again.");
+      console.error('Hint error:', error);
+    }
   };
 
-  const submitAnswer = async () => {
-    if (!question?.answer) return;
+  // UPDATE: submitAnswer to use usePoints hook and add isSubmitting
+  const submitAnswer = useCallback(async () => {
+    if (!question?.answer || isSubmitting) return;
 
-    const isCorrect =
-      userAnswer.trim().toUpperCase() === question.answer.trim().toUpperCase();
+    setIsSubmitting(true);
+    
+    const isCorrect = userAnswer.trim().toUpperCase() === question.answer.trim().toUpperCase();
+
+    // AWARD OR DEDUCT POINTS USING HOOK METHODS
+    if (isCorrect) {
+      const pointsEarned = 15; // 15 points for each correct logic answer
+      try {
+        await addGamePoints('logic', pointsEarned);
+      } catch (error) {
+        console.error('Error adding points:', error);
+      }
+    } else {
+      // Deduct points for wrong answer
+      const pointsDeducted = 5;
+      try {
+        await deductPoints(pointsDeducted);
+      } catch (error) {
+        console.error('Error deducting points:', error);
+      }
+    }
 
     const explanation =
       question.explanation ||
@@ -124,8 +174,10 @@ const Logic = () => {
       score: newScore,
       hintCount,
       question: question.question,
+      options: question.options,
       isCorrect,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      pointsChange: isCorrect ? '+15 points' : '-5 points'
     };
 
     if (isCorrect) {
@@ -133,22 +185,25 @@ const Logic = () => {
     } else {
       navigate("/LogicIncorrect", { state: resultState });
     }
-  };
+    
+    setIsSubmitting(false);
+  }, [question, isSubmitting, userAnswer, score, hintCount, navigate, addGamePoints, deductPoints]);
 
-  const handleExit = () => {
-    saveProgress(question);
-    navigate("/Dashboard");
-  };
-
+  // UPDATE: useEffect for Enter key
   useEffect(() => {
     const handleKeyPress = (e) => {
-      if (e.key === 'Enter' && userAnswer.trim() && !loading) {
+      if (e.key === 'Enter' && userAnswer.trim() && !loading && !isSubmitting) {
         submitAnswer();
       }
     };
     window.addEventListener('keypress', handleKeyPress);
     return () => window.removeEventListener('keypress', handleKeyPress);
-  }, [userAnswer, loading]);
+  }, [userAnswer, loading, isSubmitting, submitAnswer]);
+
+  const handleExit = () => {
+    saveProgress(question);
+    navigate("/Dashboard");
+  };
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-gray-900 via-black to-gray-900 font-poppins text-white">
@@ -157,28 +212,17 @@ const Logic = () => {
       {/* Stats and Actions */}
       <div className="container mx-auto px-4 pt-6">
         <div className="flex justify-between items-center mb-8">
-        <button
-  onClick={() => window.location.href = "/ChoosePuzzle"}
-  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 rounded-xl border border-gray-700 transition-all duration-300 hover-lift"
->
-  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-  </svg>
-  Save & Exit
-</button>
+          <button
+            onClick={() => window.location.href = "/ChoosePuzzle"}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 rounded-xl border border-gray-700 transition-all duration-300 hover-lift"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            Save & Exit
+          </button>
 
-          <div className="flex gap-6">
-            <div className="text-center">
-              <div className="text-gray-400 text-sm">Score</div>
-              <div className="text-2xl font-bold text-cyan-400">{score}</div>
-            </div>
-            <div className="text-center">
-              <div className="text-gray-400 text-sm">Hints Used</div>
-              <div className={`text-2xl font-bold ${hintCount >= MAX_HINTS ? 'text-red-400' : 'text-yellow-400'}`}>
-                {hintCount}/{MAX_HINTS}
-              </div>
-            </div>
-          </div>
+        
         </div>
 
         {/* Save Status */}
@@ -242,7 +286,6 @@ const Logic = () => {
                     placeholder="Enter your answer....."
                     value={userAnswer}
                     onChange={(e) => setUserAnswer(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && submitAnswer()}
                     className="w-full px-6 py-4 text-lg bg-gradient-to-r from-gray-900 to-black border-2 border-gray-700 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 rounded-xl focus:outline-none transition-all duration-300 placeholder-gray-500 text-center"
                     autoFocus
                   />
@@ -252,9 +295,9 @@ const Logic = () => {
                 <div className="flex gap-4">
                   <button
                     onClick={handleShowHint}
-                    disabled={hintUsedThisQuestion || hintCount >= MAX_HINTS || loading}
+                    disabled={hintUsedThisQuestion || loading}
                     className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-semibold transition-all duration-300 ${
-                      hintUsedThisQuestion || hintCount >= MAX_HINTS || loading
+                      hintUsedThisQuestion || loading
                         ? "bg-gray-700 text-gray-400 cursor-not-allowed"
                         : "bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-700 hover:to-orange-700 text-white hover-lift shadow-lg"
                     }`}
@@ -262,14 +305,14 @@ const Logic = () => {
                     <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                     </svg>
-                    Get Hint ({MAX_HINTS - hintCount} left)
+                    Get Hint (-3 points)
                   </button>
 
                   <button
                     onClick={submitAnswer}
-                    disabled={!userAnswer.trim() || loading}
+                    disabled={!userAnswer.trim() || loading || isSubmitting}
                     className={`flex-1 flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-semibold transition-all duration-300 ${
-                      !userAnswer.trim() || loading
+                      !userAnswer.trim() || loading || isSubmitting
                         ? "bg-gray-700 text-gray-400 cursor-not-allowed"
                         : "bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white hover-lift shadow-lg"
                     }`}

@@ -11,6 +11,7 @@ const LogicCorrect = () => {
     score = 0,
     question = "",
     hintCount = 0,
+    pointsChange = "+15 points" 
   } = location.state || {};
 
   const handleContinue = () => {
@@ -58,6 +59,19 @@ const LogicCorrect = () => {
                 Correct! 🎯
               </h1>
               <p className="text-gray-300 mt-2">You solved the logic puzzle!</p>
+            
+              {/* ADD THIS NEW SECTION FOR POINTS */}
+              <div className="mt-4">
+                <div className="inline-block px-6 py-3 bg-gradient-to-r from-green-900/30 to-emerald-800/20 rounded-xl border border-green-500/30">
+                  <div className="flex items-center gap-3">
+                    <span className="text-green-300 text-2xl">🏆</span>
+                    <div className="text-left">
+                    <div className="text-green-300 font-bold text-xl">{pointsChange || '+15 Points'}</div>
+                      <div className="text-green-200 text-sm">Added to your total</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Stats */}

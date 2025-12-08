@@ -9,6 +9,37 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
 
+  // Function to clear previous user's progress
+  const clearPreviousUserProgress = () => {
+    // Clear all localStorage items except auth-related ones
+    const authKeys = ['token', 'user', 'userId'];
+    Object.keys(localStorage).forEach(key => {
+      if (!authKeys.includes(key)) {
+        localStorage.removeItem(key);
+      }
+    });
+  };
+
+  // Function to migrate old progress to user-scoped storage
+  const migrateOldProgress = (userId) => {
+    // List of old progress keys to migrate
+    const oldProgressKeys = [
+      'riddleProgress',
+      'logicProgress',
+      'enduranceProgress'
+    ];
+    
+    oldProgressKeys.forEach(oldKey => {
+      const oldData = localStorage.getItem(oldKey);
+      if (oldData && userId) {
+        // Move to user-scoped storage
+        localStorage.setItem(`${oldKey}_${userId}`, oldData);
+        // Remove old key
+        localStorage.removeItem(oldKey);
+      }
+    });
+  };
+
   const loginPost = async () => {
     if (!email || !password) {
       setMessage("Please fill in all fields");
@@ -39,10 +70,18 @@ const Login = () => {
         throw new Error(data.message || `HTTP error! status: ${response.status}`);
       }
 
-      // Store token if returned
-      if (data.token) {
-        localStorage.setItem('token', data.token);
+      // Store user data
+      if (data.user) {
+        // Clear any old generic progress before storing new user data
+        clearPreviousUserProgress();
+        
+        // Store auth data
+        localStorage.setItem('token', data.token || '');
         localStorage.setItem('user', JSON.stringify(data.user));
+        localStorage.setItem('userId', data.user.user_id || data.user.id);
+        
+        // Migrate any old progress to user-scoped storage
+        migrateOldProgress(data.user.user_id || data.user.id);
       }
 
       setMessage("Login successful! Redirecting...");
@@ -153,8 +192,6 @@ const Login = () => {
               </div>
             </div>
 
-
-
             {/* Message Display */}
             {message && (
               <div className={`mb-6 p-4 rounded-xl ${message.includes('successful') ? 'bg-green-900/30 border border-green-500/30' : 'bg-red-900/30 border border-red-500/30'}`}>
@@ -194,7 +231,6 @@ const Login = () => {
                 'Sign In'
               )}
             </button>
-
           
             {/* Register Link */}
             <div className="text-center pt-6 border-t border-gray-700/50">
@@ -207,8 +243,6 @@ const Login = () => {
             </div>
           </div>
         </div>
-
-        
       </div>
     </div>
   );

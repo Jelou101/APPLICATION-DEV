@@ -122,7 +122,7 @@ class EnduranceController extends Controller
                         [
                             'parts' => [
                                 [
-                                    'text' => "Generate a SIMPLE logic puzzle for an endurance game. Make it pattern-based or simple math.
+                                    'text' => "Generate a SIMPLE logic puzzle for an endurance game. Make it pattern-based or simple math PLEASE DONT REPEAT QUESTIONS YOU ALREADY GENERATE. MAKE IT UNI.
                                     
                                     Format EXACTLY:
                                     QUESTION: [the logic question]
@@ -236,13 +236,6 @@ class EnduranceController extends Controller
                     'type' => 'riddle'
                 ],
                 [
-                    'question' => "I'm tall when I'm young and short when I'm old. What am I?",
-                    'hint' => 'Think about something that burns',
-                    'answer' => 'candle',
-                    'explanation' => 'A candle is tall when new, but melts and becomes shorter as it burns.',
-                    'type' => 'riddle'
-                ],
-                [
                     'question' => "What has a head and a tail but no body?",
                     'hint' => 'Think about money',
                     'answer' => 'coin',
@@ -258,14 +251,6 @@ class EnduranceController extends Controller
                     'answer' => 'c',
                     'hint' => 'Pattern repeats every 3 shapes.',
                     'explanation' => 'The pattern △ □ ○ repeats continuously. After △ □ comes ○.',
-                    'type' => 'logic'
-                ],
-                [
-                    'question' => 'Which number? 2, 4, 8, 16, ?',
-                    'options' => 'A) 24  B) 32  C) 28  D) 20',
-                    'answer' => 'b',
-                    'hint' => 'Each number doubles the previous.',
-                    'explanation' => '2 × 2 = 4, 4 × 2 = 8, 8 × 2 = 16, 16 × 2 = 32.',
                     'type' => 'logic'
                 ],
                 [

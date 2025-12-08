@@ -30,7 +30,6 @@ const EnduranceIncorrect = () => {
         timeRemaining,
         selectedTime,
         gameStarted: true,
-        
       }
     });
   };

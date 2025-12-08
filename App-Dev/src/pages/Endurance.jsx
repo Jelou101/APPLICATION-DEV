@@ -1,16 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import EnduranceHeader from "../components/EnduranceHeader";
+import { usePoints } from "../hooks/usePoints"; // CHANGE THIS - use hook instead of pointsManager
 
 const Endurance = () => {
-  const TIME_OPTIONS = [60, 90, 120]; // Timer options in seconds
-  const MAX_HINTS = 3;
+  const TIME_OPTIONS = [60, 90, 120];
   
   const [question, setQuestion] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showHint, setShowHint] = useState(false);
-  const [hintUsed, setHintUsed] = useState(false);
+ const [hintUsedThisRiddle, setHintUsedThisRiddle] = useState(false);
   const [hintCount, setHintCount] = useState(0);
   const [userAnswer, setUserAnswer] = useState("");
   const [score, setScore] = useState(0);
@@ -23,10 +23,15 @@ const Endurance = () => {
   const [fastAnswers, setFastAnswers] = useState(0);
   
 
+  const [gameOverProcessed, setGameOverProcessed] = useState(false);
+  const { addGamePoints, deductPoints } = usePoints(); // ADD THIS LINE
+  
+  
   const navigate = useNavigate();
   const location = useLocation();
   const API_BASE = import.meta.env.VITE_API_URL || "";
   const questionNumber = questionsAnswered + 1;
+  const bonusAwardedRef = useRef(false);
 
   // Initialize from location state
   useEffect(() => {
@@ -41,22 +46,55 @@ const Endurance = () => {
   }, [location]);
 
   // Timer effect
+  // Timer effect
+  // Timer effect
+  // Timer effect
   useEffect(() => {
     if (!gameStarted || gameOver || timeRemaining <= 0) return;
-
+  
     const interval = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          setGameOver(true);
+          if (!gameOverProcessed) {
+            setGameOver(true);
+            setGameOverProcessed(true);
+            
+            // When time naturally runs out, navigate
+            const completionBonus = Math.floor(questionsAnswered * 2);
+            const totalScore = score + bonusPoints;
+            
+            // Small delay for natural time up
+            setTimeout(() => {
+              navigate("/EnduranceSummary", {
+                state: {
+                  score: totalScore,
+                  questionsAnswered,
+                  totalTime: selectedTime,
+                  timeUsed: selectedTime - 0, // All time used
+                  hintCount,
+                  fastAnswers,
+                  bonusPoints,
+                  timeMode: selectedTime,
+                  completionBonus: completionBonus
+                },
+              });
+            }, 1500);
+          }
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-
+  
     return () => clearInterval(interval);
-  }, [gameStarted, gameOver, timeRemaining]);
+  }, [gameStarted, gameOver, timeRemaining, gameOverProcessed, questionsAnswered, score, bonusPoints, selectedTime, hintCount, fastAnswers, navigate]);
+  // Reset gameOverProcessed when starting new game
+    useEffect(() => {
+      if (gameStarted) {
+        setGameOverProcessed(false);
+      }
+    }, [gameStarted]);
 
   // Fetch question when game starts or after answer
   useEffect(() => {
@@ -65,32 +103,67 @@ const Endurance = () => {
     }
   }, [gameStarted, gameOver, question]);
 
-  // Navigate to summary when time runs out
-  useEffect(() => {
-    if (gameOver) {
+  // Navigate to summary when time runs out - AWARD ENDURANCE BONUS
+  // Navigate to summary when time runs out - AWARD ENDURANCE BONUS
+  /*useEffect(() => {
+    let isMounted = true;
+    
+    if (gameOver && isMounted && !bonusAwardedRef.current) {
+      console.log('🎮 Game Over triggered');
+      
+      // Mark as processed
+      bonusAwardedRef.current = true;
+      
       const totalScore = score + bonusPoints;
-      setTimeout(() => {
-        navigate("/EnduranceSummary", {
-          state: {
-            score: totalScore,
-            questionsAnswered,
-            totalTime: selectedTime,
-            timeUsed: selectedTime - timeRemaining,
-            hintCount,
-            fastAnswers,
-            bonusPoints,
-            timeMode: selectedTime
-          },
-        });
+      
+      // Award endurance completion bonus
+      const completionBonus = Math.floor(questionsAnswered * 2); // 2 points per question
+      
+      // Use hook methods instead of pointsManager
+      const awardCompletionBonus = async () => {
+        try {
+          console.log('🏆 Awarding completion bonus:', completionBonus);
+          await addGamePoints('endurance', completionBonus);
+        } catch (error) {
+          console.error('Error awarding completion bonus:', error);
+        }
+      };
+      
+      awardCompletionBonus();
+      
+      // Clear timer to prevent duplicate navigation
+      const timeoutId = setTimeout(() => {
+        if (isMounted) {
+          console.log('🚀 Navigating to summary');
+          navigate("/EnduranceSummary", {
+            state: {
+              score: totalScore,
+              questionsAnswered,
+              totalTime: selectedTime,
+              timeUsed: selectedTime - timeRemaining,
+              hintCount,
+              fastAnswers,
+              bonusPoints,
+              timeMode: selectedTime,
+              completionBonus: completionBonus
+            },
+          });
+        }
       }, 2000);
+      
+      // Cleanup function
+      return () => {
+        isMounted = false;
+        clearTimeout(timeoutId);
+      };
     }
-  }, [gameOver, navigate, score, questionsAnswered, selectedTime, timeRemaining, hintCount, fastAnswers, bonusPoints]);
+  }, [gameOver, navigate, score, questionsAnswered, selectedTime, timeRemaining, hintCount, fastAnswers, bonusPoints, addGamePoints]);*/
 
   const fetchQuestion = async () => {
     setLoading(true);
     setError(null);
     setShowHint(false);
-    setHintUsed(false);
+    setHintUsedThisRiddle(false);
     setUserAnswer("");
 
     try {
@@ -118,13 +191,59 @@ const Endurance = () => {
     setHintCount(0);
     setBonusPoints(0);
     setFastAnswers(0);
+    bonusAwardedRef.current = false;
   };
 
-  const handleShowHint = () => {
-    if (hintUsed || hintCount >= MAX_HINTS || gameOver) return;
-    setShowHint(true);
-    setHintUsed(true);
-    setHintCount((prev) => prev + 1);
+  const handleShowHint = async () => {
+    if (hintUsedThisRiddle || gameOver) return;
+    
+    try {
+      // Deduct 10 points for using hint in endurance
+      const hintCost = 10; // CHANGED from 15 to 10
+      await deductPoints(hintCost);
+      
+      setShowHint(true);
+      setHintUsedThisRiddle(true);
+      setHintCount((prev) => prev + 1);
+    } catch (error) {
+      console.error('Failed to deduct points for hint:', error);
+    }
+  };
+
+  const handleEndGameEarly = () => {
+    console.log('🛑 Ending game early');
+    
+    // Prevent multiple clicks
+    if (gameOver || gameOverProcessed) {
+      console.log('⚠️ Game already ended, ignoring click');
+      return;
+    }
+    
+    // Immediately navigate to summary with current data
+    const completionBonus = Math.floor(questionsAnswered * 2);
+    const totalScore = score + bonusPoints;
+    
+    console.log('🚀 Immediate navigation to summary');
+    
+    // Navigate immediately without delay
+    navigate("/EnduranceSummary", {
+      state: {
+        score: totalScore,
+        questionsAnswered,
+        totalTime: selectedTime,
+        timeUsed: selectedTime - timeRemaining,
+        hintCount,
+        fastAnswers,
+        bonusPoints,
+        timeMode: selectedTime,
+        completionBonus: completionBonus
+      },
+    });
+    
+    // Still set game over state to stop timer
+    setGameOver(true);
+    setGameOverProcessed(true);
+    setTimeRemaining(0);
   };
 
   const formatTime = (seconds) => {
@@ -134,19 +253,20 @@ const Endurance = () => {
   };
 
   const calculateBonus = () => {
-    const timeBonus = Math.floor(timeRemaining / 5); // Bonus based on remaining time
-    const speedBonus = timeRemaining > selectedTime * 0.7 ? 2 : 0; // Bonus for answering quickly
+    const timeBonus = Math.floor(timeRemaining / 5);
+    const speedBonus = timeRemaining > selectedTime * 0.7 ? 2 : 0;
     return timeBonus + speedBonus;
   };
 
-  const submitAnswer = () => {
+  // Submit answer - AWARD POINTS BASED ON PERFORMANCE
+  const submitAnswer = async () => {
     if (!question?.answer || !userAnswer.trim() || gameOver) return;
-
+  
     const isCorrect = userAnswer.trim().toLowerCase() === question.answer.trim().toLowerCase();
     let pointsEarned = isCorrect ? 1 : 0;
     let newBonus = 0;
     let newFastAnswers = fastAnswers;
-
+  
     if (isCorrect) {
       // Calculate bonus points for speed
       newBonus = calculateBonus();
@@ -157,6 +277,25 @@ const Endurance = () => {
       if (timeRemaining > selectedTime * 0.8) {
         newFastAnswers++;
         setFastAnswers(newFastAnswers);
+      }
+      
+      // Award total points for correct answer in endurance - 30 points
+      const basePoints = 30; // CHANGED from 5 to 30
+      const totalPointsAwarded = basePoints + newBonus;
+      
+      try {
+        await addGamePoints('endurance', totalPointsAwarded);
+      } catch (error) {
+        console.error('Error adding points:', error);
+      }
+      
+    } else {
+      // Deduct 5 points for incorrect answer in endurance
+      const pointsDeducted = 5;
+      try {
+        await deductPoints(pointsDeducted);
+      } catch (error) {
+        console.error('Error deducting points:', error);
       }
     }
 
@@ -177,7 +316,7 @@ const Endurance = () => {
       timeMode: selectedTime,
       type: question.type,
       question: question.question,
-      pointsEarned,
+      pointsEarned: isCorrect ? (30 + newBonus) : -5, // Show points earned/lost
       bonusPoints: newBonus,
       fastAnswers: newFastAnswers,
       userAnswer: userAnswer
@@ -253,16 +392,17 @@ const Endurance = () => {
                 </li>
                 <li className="flex items-start gap-3">
                   <div className="w-2 h-2 bg-cyan-500 rounded-full mt-2"></div>
-                  <span><span className="font-semibold">Score:</span> 1 point per correct answer</span>
+                  <span><span className="font-semibold">Points:</span> +30 base + time bonus for correct answers</span>
                 </li>
                 <li className="flex items-start gap-3">
                   <div className="w-2 h-2 bg-cyan-500 rounded-full mt-2"></div>
-                  <span><span className="font-semibold">Bonus points:</span> Extra points for speed</span>
+                  <span><span className="font-semibold">Penalties:</span> -5 for wrong answers, -10 for hints</span>
                 </li>
                 <li className="flex items-start gap-3">
                   <div className="w-2 h-2 bg-cyan-500 rounded-full mt-2"></div>
-                  <span><span className="font-semibold">Hints:</span> {MAX_HINTS} hints available</span>
+                  <span><span className="font-semibold">Completion Bonus:</span> +2 points per question answered</span>
                 </li>
+                
               </ul>
             </div>
           </div>
@@ -274,6 +414,7 @@ const Endurance = () => {
   // Render game screen
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-gray-900 via-black to-gray-900 font-poppins text-white">
+      <EnduranceHeader />
       {/* Stats Bar */}
       <div className="container mx-auto px-4 pt-6">
         <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
@@ -306,20 +447,14 @@ const Endurance = () => {
             <div className="text-xs text-gray-500">#{questionNumber}</div>
           </div>
 
-          {/* Hints */}
-          <div className="bg-gradient-to-r from-yellow-900/30 to-yellow-800/20 backdrop-blur-sm px-4 py-3 rounded-xl border border-yellow-700/30">
-            <div className="text-sm text-gray-400">Hints Left</div>
-            <div className={`text-2xl font-bold ${hintCount >= MAX_HINTS ? 'text-red-400' : 'text-yellow-400'}`}>
-              {MAX_HINTS - hintCount}
-            </div>
-          </div>
+          
         </div>
 
         {/* Game Over Warning */}
         {gameOver && (
           <div className="bg-gradient-to-r from-red-900/30 to-red-800/20 backdrop-blur-sm border border-red-500/30 rounded-xl p-4 mb-6 text-center animate-pulse">
             <div className="text-red-400 text-xl font-bold">⏱️ TIME'S UP!</div>
-            <div className="text-gray-300">Preparing your results...</div>
+            <div className="text-gray-300">Calculating your bonus points...</div>
           </div>
         )}
       </div>
@@ -338,14 +473,14 @@ const Endurance = () => {
             
             <button
               onClick={handleShowHint}
-              disabled={hintUsed || hintCount >= MAX_HINTS || gameOver || loading}
+              disabled={hintUsedThisRiddle || loading}
               className={`px-4 py-2 rounded-xl font-semibold transition-all duration-300 ${
-                hintUsed || hintCount >= MAX_HINTS || gameOver || loading
+                hintUsedThisRiddle || loading
                   ? 'bg-gray-800/50 text-gray-500 cursor-not-allowed border border-gray-700/30'
                   : 'bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-700 hover:to-orange-700 text-white'
               }`}
             >
-              💡 Hint ({MAX_HINTS - hintCount} left)
+              💡 Hint (-10 points) {/* CHANGE to -10 points */}
             </button>
           </div>
 
@@ -414,15 +549,15 @@ const Endurance = () => {
 
           {/* Action Buttons */}
           <div className="flex gap-4">
-            <button
-              onClick={() => {
-                setGameOver(true);
-                setTimeRemaining(0);
-              }}
-              className="flex-1 px-6 py-3 bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 text-white rounded-xl font-semibold transition-all duration-300 border border-gray-700"
-            >
-              End Game Early
-            </button>
+          <button
+            onClick={handleEndGameEarly}
+            disabled={gameOver || gameOverProcessed}
+            className={`flex-1 px-6 py-3 bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-700 hover:to-gray-800 text-white rounded-xl font-semibold transition-all duration-300 border border-gray-700 ${
+              gameOver || gameOverProcessed ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
+          >
+            {gameOver ? 'Ending Game...' : 'End Game Early'}
+          </button>
             
             <button
               onClick={submitAnswer}
@@ -440,6 +575,7 @@ const Endurance = () => {
           {/* Bonus Info */}
           <div className="mt-6 text-center text-gray-400 text-sm">
             <p>💨 Answer quickly for bonus points! Bonus: +{calculateBonus()} available</p>
+            <p className="mt-1">+30 base points, -5 for wrong answers, -10 for hints</p> 
           </div>
         </div>
       </div>

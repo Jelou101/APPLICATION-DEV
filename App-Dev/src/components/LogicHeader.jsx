@@ -1,6 +1,26 @@
-import { Link } from "react-router-dom";
+import { useEffect } from 'react'; // ADD THIS
+import { usePoints } from "../hooks/usePoints";
 
 function LogicHeader() {
+  const { points } = usePoints(); 
+
+  // Add focus listener
+  useEffect(() => {
+    const handleFocus = () => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'user',
+        newValue: localStorage.getItem('user')
+      }));
+    };
+    
+    window.addEventListener('focus', handleFocus);
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
+
   return (
     <div className="flex items-center justify-between w-full px-8 py-4">
       {/* Logo and Title Section */}
@@ -18,13 +38,11 @@ function LogicHeader() {
         </span>
       </div>
 
-      {/* Points Button */}
-      <Link to="/Login">
-        <button className="px-6 py-2 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-cyan-600 transition-all duration-300 hover-lift shadow-lg flex items-center gap-2">
-          <span className="text-yellow-300">🏆</span>
-          <span>1000 Points</span>
-        </button>
-      </Link>
+      {/* Dynamic Points Button - ONLY ONE */}
+      <div className="px-6 py-2 bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-xl font-semibold hover:from-blue-700 hover:to-cyan-600 transition-all duration-300 hover-lift shadow-lg flex items-center gap-2">
+        <span className="text-yellow-300">🏆</span>
+        <span>{points.total_points?.toLocaleString() || '1000'} Points</span>
+      </div>
     </div>
   );
 }

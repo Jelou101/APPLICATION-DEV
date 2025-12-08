@@ -13,15 +13,49 @@ class UserController extends Controller
      * Display a listing of the resource.
      */
     public function login(Request $request)
-    {
-        $email = $request->input('email');
-        $password = $request->input('password');
-        $user = User::where('email', $email) -> first();
-        if($user && Hash::check($password,$user->password) ){
-            return response()->json(["message" => 'Login Successfully!','user'=>$user],200);
-        }
-        return response()->json(["message" => 'Incorrect username or password, Please try again!'],401);
+{
+    // Validate input
+    $request->validate([
+        'email' => 'required|email',
+        'password' => 'required'
+    ]);
+
+    // Find user
+    $user = User::where('email', $request->email)->first();
+
+    // Check credentials
+    if (!$user || !Hash::check($request->password, $user->password)) {
+        return response()->json([
+            "message" => 'Incorrect email or password'
+        ], 401);
     }
+
+    // Create API token using Sanctum
+    $token = $user->createToken('auth_token')->plainTextToken;
+
+    // Get user points (with defaults)
+    $points = [
+        'total_points' => $user->total_points ?? 1000,
+        'riddle_points' => $user->riddle_points ?? 0,
+        'logic_points' => $user->logic_points ?? 0,
+        'endurance_points' => $user->endurance_points ?? 0
+    ];
+
+    // Return response with token and user data
+    return response()->json([
+        "message" => 'Login Successfully!',
+        "user" => [
+            'user_id' => $user->user_id,
+            'display_name' => $user->display_name,
+            'email' => $user->email,
+            'total_points' => $points['total_points'],
+            'riddle_points' => $points['riddle_points'],
+            'logic_points' => $points['logic_points'],
+            'endurance_points' => $points['endurance_points']
+        ],
+        "token" => $token
+    ], 200);
+}
 
     /**
      * Show the form for creating a new resource.
@@ -42,6 +76,12 @@ class UserController extends Controller
             $validated['display_name'] = $validated['displayName'];
             unset($validated['displayName']);
             $validated['password'] = Hash::make($validated['password']);
+
+            // Initialize points for new user
+            $validated['total_points'] = 1000; // Starting points
+            $validated['riddle_points'] = 0;
+            $validated['logic_points'] = 0;
+            $validated['endurance_points'] = 0;
 
             $user = User::create($validated);
 
