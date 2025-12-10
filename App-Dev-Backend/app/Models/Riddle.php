@@ -15,6 +15,7 @@ class Riddle extends Model
         'question',
         'answer',
         'hint',
+        'explanation',
         'source',
     ];
 }

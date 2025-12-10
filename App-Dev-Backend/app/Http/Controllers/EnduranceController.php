@@ -46,125 +46,144 @@ class EnduranceController extends Controller
     /**
      * Generate AI riddle using Gemini
      */
-    private function generateAIRiddle()
-    {
-        $apiKey = env('GEMINI_API_KEY');
-        
-        if (!$apiKey) {
-            Log::warning('Gemini API key not configured');
-            return null;
-        }
-        
-        try {
-            $response = Http::timeout(30)->withoutVerifying()
-                ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={$apiKey}", [
-                    'contents' => [
-                        [
-                            'parts' => [
-                                [
-                                    'text' => "Generate a SIMPLE riddle for an endurance game. The answer must be ONE WORD only.
-                                    
-                                    Format EXACTLY:
-                                    RIDDLE: [the riddle question]
-                                    HINT: [a helpful hint]
-                                    ANSWER: [one word only]
-                                    EXPLANATION: [Explain clearly why this is the answer in 1 sentence]
-
-                                    Example:
-                                    RIDDLE: What has keys but can't open locks?
-                                    HINT: Think about musical instruments
-                                    ANSWER: piano
-                                    EXPLANATION: A piano has keys (piano keys) but they are musical keys, not keys that open locks.
-
-                                    Generate a new unique riddle:"
-                                ]
-                            ]
-                        ]
-                    ],
-                    'generationConfig' => [
-                        'temperature' => 1.0,
-                        'maxOutputTokens' => 150,
-                    ]
-                ]);
-        
-            if ($response->successful()) {
-                $data = $response->json();
-                $aiText = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-                
-                Log::info('AI Riddle Generated:', ['response' => $aiText]);
-                return $this->parseAIResponse($aiText, 'riddle');
-            } else {
-                Log::error('AI Riddle API failed:', ['response' => $response->body()]);
-            }
-        } catch (\Exception $e) {
-            Log::error('AI Riddle Generation Error: ' . $e->getMessage());
-        }
-        
+    /**
+ * Generate AI riddle using OpenRouter
+ */
+private function generateAIRiddle()
+{
+    $apiKey = env('OPENROUTER_API_KEY');
+    
+    if (!$apiKey) {
+        Log::warning('OpenRouter API key not configured');
         return null;
     }
+    
+    try {
+                $response = Http::timeout(30)
+            ->withoutVerifying()  // ← ADD THIS LINE
+            ->withHeaders([
+                'Authorization' => 'Bearer ' . $apiKey,
+                'HTTP-Referer' => env('APP_URL', 'http://localhost'),
+                'X-Title' => env('APP_NAME', 'Laravel Puzzle'),
+                'Content-Type' => 'application/json',
+            ])
+            ->post('https://openrouter.ai/api/v1/chat/completions', [
+                'model' => 'openai/gpt-oss-20b:free',
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are a riddle generator. Always format responses exactly as requested.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => "Generate a SIMPLE riddle for an endurance game. The answer must be ONE WORD only and MAKE SURE NO REPEATING OF RIDDLES. IT MUST BE UNIQUE AND NOT THE SAME IN THE PREVIOUS RIDDLE. .
+                            
+                            Format EXACTLY:
+                            RIDDLE: [the riddle question]
+                            HINT: [a helpful hint]
+                            ANSWER: [one word only]
+                            EXPLANATION: [Explain clearly why this is the answer in 1 sentence]
+
+                            Example:
+                            RIDDLE: What has keys but can't open locks?
+                            HINT: Think about musical instruments
+                            ANSWER: piano
+                            EXPLANATION: A piano has keys (piano keys) but they are musical keys, not keys that open locks.
+
+                            Generate a new unique riddle:"
+                    ]
+                ],
+                'temperature' => 1.0,
+                'max_tokens' => 200,
+            ]);
+    
+        if ($response->successful()) {
+            $data = $response->json();
+            $aiText = $data['choices'][0]['message']['content'] ?? '';
+            
+            Log::info('AI Riddle Generated:', ['response' => $aiText]);
+            return $this->parseAIResponse($aiText, 'riddle');
+        } else {
+            Log::error('AI Riddle API failed:', ['response' => $response->body()]);
+        }
+    } catch (\Exception $e) {
+        Log::error('AI Riddle Generation Error: ' . $e->getMessage());
+    }
+    
+    return null;
+}
     
     /**
      * Generate AI logic question using Gemini
      */
-    private function generateAILogicQuestion()
-    {
-        $apiKey = env('GEMINI_API_KEY');
-        
-        if (!$apiKey) {
-            Log::warning('Gemini API key not configured');
-            return null;
-        }
-        
-        try {
-            $response = Http::timeout(30)->withoutVerifying()
-                ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={$apiKey}", [
-                    'contents' => [
-                        [
-                            'parts' => [
-                                [
-                                    'text' => "Generate a SIMPLE logic puzzle for an endurance game. Make it pattern-based or simple math PLEASE DONT REPEAT QUESTIONS YOU ALREADY GENERATE. MAKE IT UNI.
-                                    
-                                    Format EXACTLY:
-                                    QUESTION: [the logic question]
-                                    OPTIONS: [4 multiple choice options labeled A, B, C, D]
-                                    ANSWER: [single letter A, B, C, or D]
-                                    HINT: [a helpful hint]
-                                    EXPLANATION: [Explain the solution in 1-2 sentences]
-
-                                    Example:
-                                    QUESTION: What comes next? 2, 4, 8, 16, ?
-                                    OPTIONS: A) 24 B) 32 C) 28 D) 20
-                                    ANSWER: B
-                                    HINT: Each number doubles the previous.
-                                    EXPLANATION: The pattern is multiplying by 2 each time: 2×2=4, 4×2=8, 8×2=16, 16×2=32.
-
-                                    Generate a new unique logic puzzle:"
-                                ]
-                            ]
-                        ]
-                    ],
-                    'generationConfig' => [
-                        'temperature' => 0.8,
-                        'maxOutputTokens' => 200,
-                    ]
-                ]);
-        
-            if ($response->successful()) {
-                $data = $response->json();
-                $aiText = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-                
-                Log::info('AI Logic Question Generated:', ['response' => $aiText]);
-                return $this->parseAIResponse($aiText, 'logic');
-            } else {
-                Log::error('AI Logic API failed:', ['response' => $response->body()]);
-            }
-        } catch (\Exception $e) {
-            Log::error('AI Logic Generation Error: ' . $e->getMessage());
-        }
-        
+    /**
+ * Generate AI logic question using OpenRouter
+ */
+private function generateAILogicQuestion()
+{
+    $apiKey = env('OPENROUTER_API_KEY');
+    
+    if (!$apiKey) {
+        Log::warning('OpenRouter API key not configured');
         return null;
     }
     
+    try {
+                $response = Http::timeout(30)
+            ->withoutVerifying()  // ← ADD THIS LINE
+            ->withHeaders([
+                'Authorization' => 'Bearer ' . $apiKey,
+                'HTTP-Referer' => env('APP_URL', 'http://localhost'),
+                'X-Title' => env('APP_NAME', 'Laravel Puzzle'),
+                'Content-Type' => 'application/json',
+            ])
+            ->post('https://openrouter.ai/api/v1/chat/completions', [
+                'model' => 'openai/gpt-oss-20b:free',
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are a logic puzzle generator. Always format responses exactly as requested.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => "Generate a SIMPLE logic puzzle for an endurance game. Make it pattern-based or simple math OR ANYTHINIG THAT IS LOGIC! PLEASE DONT REPEAT QUESTIONS YOU ALREADY GENERATE. MAKE IT UNIQUE.
+                            
+                            Format EXACTLY:
+                            QUESTION: [the logic question]
+                            OPTIONS: [4 multiple choice options labeled A, B, C, D]
+                            ANSWER: [single letter A, B, C, or D]
+                            HINT: [a helpful hint]
+                            EXPLANATION: [Explain the solution in 1-2 sentences]
+
+                            Example:
+                            QUESTION: What comes next? 2, 4, 8, 16, ?
+                            OPTIONS: A) 24 B) 32 C) 28 D) 20
+                            ANSWER: B
+                            HINT: Each number doubles the previous.
+                            EXPLANATION: The pattern is multiplying by 2 each time: 2×2=4, 4×2=8, 8×2=16, 16×2=32.
+
+                            Generate a new unique logic puzzle:"
+                    ]
+                ],
+                'temperature' => 0.8,
+                'max_tokens' => 200,
+            ]);
+    
+        if ($response->successful()) {
+            $data = $response->json();
+            $aiText = $data['choices'][0]['message']['content'] ?? '';
+            
+            Log::info('AI Logic Question Generated:', ['response' => $aiText]);
+            return $this->parseAIResponse($aiText, 'logic');
+        } else {
+            Log::error('AI Logic API failed:', ['response' => $response->body()]);
+        }
+    } catch (\Exception $e) {
+        Log::error('AI Logic Generation Error: ' . $e->getMessage());
+    }
+    
+    return null;
+}
     /**
      * Parse AI response based on type
      */
