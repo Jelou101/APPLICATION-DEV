@@ -502,14 +502,12 @@ const Endurance = () => {
                 </button>
               </div>
             ) : question ? (
-              <div className="space-y-6">
+              <div className="space-y-7">
                 <div className="bg-gradient-to-r from-gray-900/50 to-black/50 border-2 border-gray-700/50 rounded-xl p-6">
-                  <div className="text-2xl text-center leading-relaxed font-medium text-gray-100">
+                  <div className="text-xl text-center leading-snug font-medium text-gray-100">
                     {question.question}
                   </div>
-                  {question.options && (
-                    <div className="mt-4 text-gray-300 text-center">{question.options}</div>
-                  )}
+                  {/* Removed options completely */}
                 </div>
 
                 {/* Hint Display */}
@@ -522,7 +520,7 @@ const Endurance = () => {
                         </svg>
                         <span className="font-semibold">Hint #{hintCount}</span>
                       </div>
-                      <div className="text-yellow-200">{question.hint}</div>
+                      <div className="text-yellow-200 ">{question.hint}</div>
                     </div>
                   </div>
                 )}

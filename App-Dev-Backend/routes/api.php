@@ -40,10 +40,20 @@ Route::put('/riddles/{id}', [RiddleController::class, 'update']);
 Route::delete('/riddles/{id}', [RiddleController::class, 'destroy']);
 Route::get('/riddles/check-duplicates', [RiddleController::class, 'checkDuplicates']);
 Route::get('/riddles/statistics', [RiddleController::class, 'statistics']);
+Route::get('/test-openrouter', [RiddleController::class, 'testOpenRouter']);
 
 
 // Logic Questions API
 Route::get('/logic/generate', [LogicController::class, 'generate']);
+// Logic question routes
+Route::get('/logic', [LogicController::class, 'index']);
+Route::get('/logic/{id}', [LogicController::class, 'show']);
+Route::post('/logic', [LogicController::class, 'store']);
+Route::put('/logic/{id}', [LogicController::class, 'update']);
+Route::delete('/logic/{id}', [LogicController::class, 'destroy']);
+Route::post('/logic/generate', [LogicController::class, 'generate']);
+Route::get('/logic/statistics', [LogicController::class, 'statistics']);
+
 
 // Endurance API (50 mixed riddle/logic questions)
 Route::match(['get', 'post'], '/endurance/generate', [EnduranceController::class, 'generate']);
@@ -151,3 +161,47 @@ Route::get('/test-gemini', function () {
 });
 
 Route::get('/riddles/test', [RiddleController::class, 'testGenerate']);
+
+
+// Add this to your routes/api.php
+Route::get('/test-gemini-logic', function() {
+    $apiKey = env('GEMINI_API_KEY_3');
+    
+    if (!$apiKey) {
+        return response()->json(['error' => 'No API key'], 500);
+    }
+    
+    try {
+        $response = Http::timeout(30)
+            ->withOptions(['verify' => false])
+            ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
+                'contents' => [[
+                    'parts' => [['text' => 'Say "Gemini logic test working" in one word.']]
+                ]],
+                'generationConfig' => [
+                    'temperature' => 0.7,
+                    'maxOutputTokens' => 10,
+                ]
+            ]);
+        
+        if ($response->successful()) {
+            $data = $response->json();
+            return response()->json([
+                'success' => true,
+                'response' => $data['candidates'][0]['content']['parts'][0]['text'] ?? 'No text',
+                'status' => 'Connected'
+            ]);
+        } else {
+            return response()->json([
+                'success' => false,
+                'status' => $response->status(),
+                'error' => $response->body()
+            ]);
+        }
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+});

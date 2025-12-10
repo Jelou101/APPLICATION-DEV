@@ -75,16 +75,7 @@ function Header() {
               How to Play
             </button>
 
-            <NavLink
-              to="/LeaderBoard"
-              className={({ isActive }) =>
-                `text-lg font-medium transition-all duration-300 hover:text-cyan-400 ${
-                  isActive ? "text-cyan-400 font-bold border-b-2 border-cyan-400 pb-1" : "text-gray-300"
-                }`
-              }
-            >
-              LeaderBoard
-            </NavLink>
+            
 
             {/* Desktop Auth Buttons */}
             <div className="flex items-center gap-4 ml-4">
@@ -147,20 +138,6 @@ function Header() {
               >
                 How to Play
               </button>
-
-              <NavLink
-                to="/LeaderBoard"
-                onClick={() => setIsMobileMenuOpen(false)}
-                className={({ isActive }) =>
-                  `text-lg font-medium py-3 px-4 rounded-xl transition-all duration-300 ${
-                    isActive 
-                      ? "bg-gradient-to-r from-blue-600/20 to-cyan-500/20 text-cyan-400 border border-cyan-500/30" 
-                      : "text-gray-300 hover:bg-gray-800/50"
-                  }`
-                }
-              >
-                LeaderBoard
-              </NavLink>
 
               {/* Mobile Auth Buttons */}
               <div className="flex flex-col gap-3 pt-6 border-t border-gray-800">

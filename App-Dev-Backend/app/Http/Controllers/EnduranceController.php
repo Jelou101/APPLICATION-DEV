@@ -3,9 +3,10 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\Riddle;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log; // Add this import
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
+use App\Models\Riddle;
 
 class EnduranceController extends Controller
 {
@@ -16,273 +17,165 @@ class EnduranceController extends Controller
     {
         $timeMode = (int) $request->query('time', 60);
         $questionNumber = (int) $request->query('q', 1);
-        
-        // Mix of question types - 50% riddle, 50% logic
+
+        // Randomly select type
         $type = rand(1, 2) === 1 ? 'riddle' : 'logic';
-        
-        if ($type === 'riddle') {
-            $question = $this->generateAIRiddle();
-        } else {
-            $question = $this->generateAILogicQuestion();
-        }
-        
-        // If AI fails, fallback to predefined questions
+
+        // Generate AI question
+        $question = $type === 'riddle' ? $this->generateAIRiddle() : $this->generateAILogicQuestion();
+
+        // Fallback if AI fails
         if (!$question) {
             $question = $this->getFallbackQuestion($type);
         }
-        
+
         // Add metadata
         $question['time_mode'] = $timeMode;
         $question['question_number'] = $questionNumber;
         $question['type'] = $type;
         
+        // Ensure 'options' is unset or null for all question types
+        unset($question['options']); 
+
         return response()->json([
             'success' => true,
             'message' => 'Endurance question generated',
             'data' => $question
-        ], 200);
+        ]);
     }
-    
+
     /**
-     * Generate AI riddle using Gemini
+     * Generate AI riddle
      */
+    private function generateAIRiddle()
+    {
+        return $this->generateAIQuestion('riddle');
+    }
+
     /**
- * Generate AI riddle using OpenRouter
- */
-private function generateAIRiddle()
-{
-    $apiKey = env('OPENROUTER_API_KEY');
-    
-    if (!$apiKey) {
-        Log::warning('OpenRouter API key not configured');
+     * Generate AI logic question
+     */
+    private function generateAILogicQuestion()
+    {
+        return $this->generateAIQuestion('logic');
+    }
+
+    /**
+     * Unified AI generation function
+     */
+    private function generateAIQuestion(string $type)
+    {
+        $apiKey = env('GEMINI_API_KEY');
+        if (!$apiKey) {
+            Log::error('Gemini API key not configured');
+            return null;
+        }
+
+        $existingAnswers = Riddle::pluck('answer')->map(fn($a) => strtolower(trim($a)))->toArray();
+        $themes = $type === 'riddle'
+            ? [
+                'animals' => 'Create a riddle about an animal',
+                'objects' => 'Create a riddle about a common object',
+                'nature' => 'Create a riddle about nature',
+                'food' => 'Create a riddle about food or drink'
+            ]
+            : [
+                // Logic puzzles must now have a clear, non-multiple-choice answer (e.g., a number, a word, or a simple sequence item).
+                'patterns' => 'Create a simple pattern-based logic puzzle that requires a single numeric or word answer',
+                'math' => 'Create a simple math or numeric sequence puzzle where the user must provide the missing number'
+            ];
+
+        $selectedTheme = array_rand($themes);
+        $themeInstruction = $themes[$selectedTheme];
+
+        // MODIFICATION 1: Update Prompts to remove OPTIONS instructions.
+        $prompt = $type === 'riddle'
+            ? "{$themeInstruction}. Answer must be one word.\n\nFormat EXACTLY:\nRIDDLE: [question]\nHINT: [hint]\nANSWER: [one word lowercase]\nEXPLANATION: [1 sentence]"
+            // Logic prompt changed to request a single-word or numeric answer.
+            : "{$themeInstruction}. Generate a logic puzzle that has a clear, single-word or numeric answer.\n\nFormat EXACTLY:\nQUESTION: [question]\nANSWER: [the correct single word or number]\nHINT: [short hint]\nEXPLANATION: [1-2 sentences]";
+
+        try {
+            $response = Http::withoutVerifying()
+                ->timeout(45)
+                ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
+                    'contents' => [['parts' => [['text' => $prompt]]]],
+                    'generationConfig' => [
+                        'temperature' => 0.8,
+                        'maxOutputTokens' => 1500,
+                        'topP' => 0.9,
+                        'topK' => 40
+                    ]
+                ]);
+
+            if ($response->successful()) {
+                $aiText = $response->json()['candidates'][0]['content']['parts'][0]['text'] ?? '';
+                return $this->parseAIResponse($aiText, $type);
+            }
+
+            Log::error("AI API failed: " . $response->body());
+        } catch (\Exception $e) {
+            Log::error("AI Generation Error: " . $e->getMessage());
+        }
+
         return null;
     }
-    
-    try {
-                $response = Http::timeout(30)
-            ->withoutVerifying()  // ← ADD THIS LINE
-            ->withHeaders([
-                'Authorization' => 'Bearer ' . $apiKey,
-                'HTTP-Referer' => env('APP_URL', 'http://localhost'),
-                'X-Title' => env('APP_NAME', 'Laravel Puzzle'),
-                'Content-Type' => 'application/json',
-            ])
-            ->post('https://openrouter.ai/api/v1/chat/completions', [
-                'model' => 'openai/gpt-oss-20b:free',
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are a riddle generator. Always format responses exactly as requested.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => "Generate a SIMPLE riddle for an endurance game. The answer must be ONE WORD only and MAKE SURE NO REPEATING OF RIDDLES. IT MUST BE UNIQUE AND NOT THE SAME IN THE PREVIOUS RIDDLE. .
-                            
-                            Format EXACTLY:
-                            RIDDLE: [the riddle question]
-                            HINT: [a helpful hint]
-                            ANSWER: [one word only]
-                            EXPLANATION: [Explain clearly why this is the answer in 1 sentence]
 
-                            Example:
-                            RIDDLE: What has keys but can't open locks?
-                            HINT: Think about musical instruments
-                            ANSWER: piano
-                            EXPLANATION: A piano has keys (piano keys) but they are musical keys, not keys that open locks.
-
-                            Generate a new unique riddle:"
-                    ]
-                ],
-                'temperature' => 1.0,
-                'max_tokens' => 200,
-            ]);
-    
-        if ($response->successful()) {
-            $data = $response->json();
-            $aiText = $data['choices'][0]['message']['content'] ?? '';
-            
-            Log::info('AI Riddle Generated:', ['response' => $aiText]);
-            return $this->parseAIResponse($aiText, 'riddle');
-        } else {
-            Log::error('AI Riddle API failed:', ['response' => $response->body()]);
-        }
-    } catch (\Exception $e) {
-        Log::error('AI Riddle Generation Error: ' . $e->getMessage());
-    }
-    
-    return null;
-}
-    
     /**
-     * Generate AI logic question using Gemini
-     */
-    /**
- * Generate AI logic question using OpenRouter
- */
-private function generateAILogicQuestion()
-{
-    $apiKey = env('OPENROUTER_API_KEY');
-    
-    if (!$apiKey) {
-        Log::warning('OpenRouter API key not configured');
-        return null;
-    }
-    
-    try {
-                $response = Http::timeout(30)
-            ->withoutVerifying()  // ← ADD THIS LINE
-            ->withHeaders([
-                'Authorization' => 'Bearer ' . $apiKey,
-                'HTTP-Referer' => env('APP_URL', 'http://localhost'),
-                'X-Title' => env('APP_NAME', 'Laravel Puzzle'),
-                'Content-Type' => 'application/json',
-            ])
-            ->post('https://openrouter.ai/api/v1/chat/completions', [
-                'model' => 'openai/gpt-oss-20b:free',
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are a logic puzzle generator. Always format responses exactly as requested.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => "Generate a SIMPLE logic puzzle for an endurance game. Make it pattern-based or simple math OR ANYTHINIG THAT IS LOGIC! PLEASE DONT REPEAT QUESTIONS YOU ALREADY GENERATE. MAKE IT UNIQUE.
-                            
-                            Format EXACTLY:
-                            QUESTION: [the logic question]
-                            OPTIONS: [4 multiple choice options labeled A, B, C, D]
-                            ANSWER: [single letter A, B, C, or D]
-                            HINT: [a helpful hint]
-                            EXPLANATION: [Explain the solution in 1-2 sentences]
-
-                            Example:
-                            QUESTION: What comes next? 2, 4, 8, 16, ?
-                            OPTIONS: A) 24 B) 32 C) 28 D) 20
-                            ANSWER: B
-                            HINT: Each number doubles the previous.
-                            EXPLANATION: The pattern is multiplying by 2 each time: 2×2=4, 4×2=8, 8×2=16, 16×2=32.
-
-                            Generate a new unique logic puzzle:"
-                    ]
-                ],
-                'temperature' => 0.8,
-                'max_tokens' => 200,
-            ]);
-    
-        if ($response->successful()) {
-            $data = $response->json();
-            $aiText = $data['choices'][0]['message']['content'] ?? '';
-            
-            Log::info('AI Logic Question Generated:', ['response' => $aiText]);
-            return $this->parseAIResponse($aiText, 'logic');
-        } else {
-            Log::error('AI Logic API failed:', ['response' => $response->body()]);
-        }
-    } catch (\Exception $e) {
-        Log::error('AI Logic Generation Error: ' . $e->getMessage());
-    }
-    
-    return null;
-}
-    /**
-     * Parse AI response based on type
+     * Parse AI response
      */
     private function parseAIResponse(string $text, string $type): ?array
     {
-        $text = trim($text);
-        
-        if ($type === 'riddle') {
-            $patterns = [
-                'question' => '/RIDDLE:\s*(.+?)(?:\n|$)/i',
-                'hint' => '/HINT:\s*(.+?)(?:\n|$)/i',
-                'answer' => '/ANSWER:\s*(.+?)(?:\n|$)/i',
-                'explanation' => '/EXPLANATION:\s*(.+?)(?:\n|$)/i',
-            ];
-        } else {
-            $patterns = [
-                'question' => '/QUESTION:\s*(.+?)(?:\n|$)/i',
-                'options' => '/OPTIONS:\s*(.+?)(?:\n|$)/i',
-                'answer' => '/ANSWER:\s*(.+?)(?:\n|$)/i',
-                'hint' => '/HINT:\s*(.+?)(?:\n|$)/i',
-                'explanation' => '/EXPLANATION:\s*(.+?)(?:\n|$)/i',
-            ];
-        }
-        
+        $text = trim(str_replace(['```', '**', '*'], '', $text));
+
         $data = [];
-        foreach ($patterns as $key => $pattern) {
-            if (preg_match($pattern, $text, $matches)) {
-                $data[$key] = trim($matches[1]);
-            }
+        if ($type === 'riddle') {
+            preg_match('/RIDDLE:\s*(.+)/i', $text, $data['question']);
+            preg_match('/HINT:\s*(.+)/i', $text, $data['hint']);
+            preg_match('/ANSWER:\s*(.+)/i', $text, $data['answer']);
+            preg_match('/EXPLANATION:\s*(.+)/i', $text, $data['explanation']);
+        } else {
+            // MODIFICATION 2: Removed OPTIONS parsing for logic questions
+            preg_match('/QUESTION:\s*(.+)/i', $text, $data['question']);
+            preg_match('/ANSWER:\s*(.+)/i', $text, $data['answer']);
+            preg_match('/HINT:\s*(.+)/i', $text, $data['hint']);
+            preg_match('/EXPLANATION:\s*(.+)/i', $text, $data['explanation']);
         }
-        
-        if (isset($data['question']) && isset($data['answer'])) {
-            $result = [
-                'question' => $data['question'],
-                'hint' => $data['hint'] ?? 'Think carefully!',
-                'answer' => strtolower($data['answer']),
-                'explanation' => $data['explanation'] ?? 'No explanation available.',
-                'type' => $type
-            ];
-            
-            if ($type === 'logic' && isset($data['options'])) {
-                $result['options'] = $data['options'];
-            }
-            
-            return $result;
+
+        if (empty($data['question']) || empty($data['answer'])) {
+            return null;
         }
-        
-        Log::warning('Failed to parse AI response:', [
-            'type' => $type,
-            'text' => $text,
-            'parsed_data' => $data
-        ]);
-        
-        return null;
+
+        $result = [
+            'question' => trim($data['question'][1]),
+            'answer' => strtolower(trim($data['answer'][1])),
+            'hint' => $data['hint'][1] ?? 'Think carefully!',
+            'explanation' => $data['explanation'][1] ?? 'No explanation available.',
+            'type' => $type
+        ];
+
+        // MODIFICATION 2 (continued): Ensure 'options' is never added to the result array
+        // The check 'if ($type === 'logic') { ... }' is now removed.
+
+        return $result;
     }
-    
+
     /**
-     * Get fallback question if AI fails
+     * Fallback questions if AI fails
      */
     private function getFallbackQuestion(string $type): array
     {
         if ($type === 'riddle') {
             $fallbacks = [
-                [
-                    'question' => "What has keys but can't open locks?",
-                    'hint' => 'Think about musical instruments',
-                    'answer' => 'piano',
-                    'explanation' => 'A piano has keys (piano keys) but they are musical keys, not keys that open locks.',
-                    'type' => 'riddle'
-                ],
-                [
-                    'question' => "What has a head and a tail but no body?",
-                    'hint' => 'Think about money',
-                    'answer' => 'coin',
-                    'explanation' => 'A coin has a head (the front with a face) and a tail (the back side) but no actual body.',
-                    'type' => 'riddle'
-                ],
+                ['question' => "What has keys but can't open locks?", 'hint' => "Think musical", 'answer' => 'piano', 'explanation' => 'A piano has keys but they are musical keys.','type'=>'riddle'],
+                ['question' => "What has a head and tail but no body?", 'hint' => "Think coins", 'answer' => 'coin', 'explanation' => 'A coin has a head and tail but no body.','type'=>'riddle'],
             ];
         } else {
+            // MODIFICATION 3: Removed OPTIONS from fallback logic questions
             $fallbacks = [
-                [
-                    'question' => 'What comes next? △ □ ○ △ □ ___',
-                    'options' => 'A) △  B) □  C) ○  D) ☆',
-                    'answer' => 'c',
-                    'hint' => 'Pattern repeats every 3 shapes.',
-                    'explanation' => 'The pattern △ □ ○ repeats continuously. After △ □ comes ○.',
-                    'type' => 'logic'
-                ],
-                [
-                    'question' => 'What next? 1, 1, 2, 3, 5, 8, 13, ?',
-                    'options' => 'A) 18  B) 20  C) 21  D) 19',
-                    'answer' => 'c',
-                    'hint' => 'Fibonacci sequence: add previous two numbers.',
-                    'explanation' => '8 + 13 = 21. This is the Fibonacci sequence.',
-                    'type' => 'logic'
-                ],
+                ['question'=>'What comes next in the sequence: 2, 4, 8, 16, ?','answer'=>'32','hint'=>'The numbers are doubling.','explanation'=>'The sequence is a power of 2: $2^1, 2^2, 2^3, 2^4, 2^5$. The answer is 32.','type'=>'logic'],
+                ['question'=>'What is the next number in the Fibonacci sequence: 1, 1, 2, 3, 5, 8, 13, ?','answer'=>'21','hint'=>'Add the previous two numbers together.','explanation'=>'The sum of the last two numbers ($8 + 13$) equals the next number, 21.','type'=>'logic']
             ];
         }
-        
         return $fallbacks[array_rand($fallbacks)];
     }
-}   
+}
