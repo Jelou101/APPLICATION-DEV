@@ -15,6 +15,7 @@ Route::post('/register', [UserController::class,'register']);
 
 // User Progress API - Add these 3 lines
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/leaderboard', [UserController::class, 'getLeaderboard']);
     Route::get('/progress/{gameMode}', [UserProgressController::class, 'show']);
     Route::post('/progress/{gameMode}', [UserProgressController::class, 'update']);
     Route::post('/progress/{gameMode}/reset', [UserProgressController::class, 'reset']);
@@ -39,7 +40,7 @@ Route::put('/riddles/{id}', [RiddleController::class, 'update']);
 Route::delete('/riddles/{id}', [RiddleController::class, 'destroy']);
 Route::get('/riddles/check-duplicates', [RiddleController::class, 'checkDuplicates']);
 Route::get('/riddles/statistics', [RiddleController::class, 'statistics']);
-Route::post('/riddles/clear-cache', [RiddleController::class, 'clearCache']);
+
 
 // Logic Questions API
 Route::get('/logic/generate', [LogicController::class, 'generate']);
@@ -57,6 +58,7 @@ Route::middleware('auth:sanctum')->get('/test-auth', function (Request $request)
         'user' => $request->user()  // Changed from auth()->user() to $request->user()
     ]);
 });
+
 
 Route::get('/list-gemini-models', function() {
     $apiKey = env('GEMINI_API_KEY');
@@ -105,55 +107,47 @@ Route::get('/list-gemini-models', function() {
     }
 });
 
-// Add to api.php
-Route::get('/test-new-key', function() {
+// Add this route in routes/api.php
+Route::get('/test-gemini', function () {
     $apiKey = env('GEMINI_API_KEY');
     
-    // Show first/last few characters (don't expose full key)
-    $keyPreview = substr($apiKey, 0, 10) . '...' . substr($apiKey, -4);
+    if (!$apiKey) {
+        return response()->json(['error' => 'No API key'], 500);
+    }
     
-    // Simple test
     try {
         $response = Http::withoutVerifying()
-            ->timeout(10)
+            ->timeout(30)
             ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
                 'contents' => [[
-                    'parts' => [['text' => 'Say "Hello World"']]
+                    'parts' => [['text' => 'Say hello in one word']]
                 ]],
-                'generationConfig' => ['maxOutputTokens' => 10]
+                'generationConfig' => [
+                    'temperature' => 0.7,
+                    'maxOutputTokens' => 10,
+                ]
             ]);
-            
-        return response()->json([
-            'status' => $response->successful() ? '✅ Working' : '❌ Failed',
-            'key_preview' => $keyPreview,
-            'response_code' => $response->status(),
-            'message' => $response->successful() ? 'New key is working!' : 'Check API key',
-            'body_preview' => substr($response->body(), 0, 200)
-        ]);
+        
+        if ($response->successful()) {
+            $data = $response->json();
+            return response()->json([
+                'success' => true,
+                'response' => $data,
+                'text' => $data['candidates'][0]['content']['parts'][0]['text'] ?? 'No text'
+            ]);
+        } else {
+            return response()->json([
+                'success' => false,
+                'status' => $response->status(),
+                'error' => $response->body()
+            ]);
+        }
     } catch (\Exception $e) {
         return response()->json([
-            'status' => '❌ Error',
-            'key_preview' => $keyPreview,
+            'success' => false,
             'error' => $e->getMessage()
         ]);
     }
-});
-
-Route::get('/debug-riddle', function() {
-    $apiKey = env('GEMINI_API_KEY');
-    
-    $response = Http::withoutVerifying()
-        ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
-            'contents' => [[
-                'parts' => [['text' => 'Create a riddle. Format: RIDDLE: [q] ANSWER: [a]']]
-            ]],
-            'generationConfig' => ['maxOutputTokens' => 100]
-        ]);
-    
-    return response()->json([
-        'status' => $response->status(),
-        'body' => $response->json()
-    ]);
 });
 
 Route::get('/riddles/test', [RiddleController::class, 'testGenerate']);

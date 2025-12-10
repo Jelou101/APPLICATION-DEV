@@ -8,7 +8,6 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class RiddleController extends Controller
 {
@@ -93,24 +92,24 @@ class RiddleController extends Controller
      */
     public function generate(Request $request)
     {
+        Log::info("=== AI RIDDLE GENERATION STARTED (gemini-2.5-flash) ===");
+        Log::info("API Key exists: " . (env('GEMINI_API_KEY') ? 'Yes' : 'No'));
+        Log::info("Cache key: ai_riddle_today_" . now()->format('Y-m-d'));
+        
         // Daily cache
-        $cacheKey = 'ai_riddle_today_' . now()->format('Y-m-d');
-        if (Cache::has($cacheKey)) {
-            $cached = Cache::get($cacheKey);
-            return response()->json([
-                'success' => true,
-                'ai_generated' => $cached['ai_generated'],
-                'cached' => true,
-                'message' => $cached['ai_generated'] ? 'AI riddle (cached)' : 'Fallback riddle (cached)',
-                'data' => $cached['data']
-            ]);
-        }
+        $cacheKey = null;
+       
         
         $debugLog = ['timestamp' => now()->toDateTimeString()];
         
         $apiKey = env('GEMINI_API_KEY');
         if (!$apiKey) {
-            return $this->saveAndReturnFallback('no_api_key', $debugLog, $cacheKey);
+            Log::error("No API key found");
+            return response()->json([
+                'success' => false,
+                'message' => 'API key not configured',
+                'error_code' => 'NO_API_KEY'
+            ], 500);
         }
         
         // Get existing answers for uniqueness
@@ -139,145 +138,242 @@ class RiddleController extends Controller
         
         $debugLog['selected_theme'] = $selectedTheme;
         
-        // ========== IMPROVED PROMPT FOR RELIABILITY ==========
+        // ========== SIMPLIFIED PROMPT - FIXED FORMAT ISSUE ==========
         $prompt = "{$themeInstruction}. Answer must be one word.
 
-CRITICAL: Format your response EXACTLY like this - 4 lines total:
+Format your response EXACTLY like this (4 lines):
 
 RIDDLE: [Your riddle question ending with ?]
-HINT: [Short hint, 2-4 words]
-ANSWER: [One word answer - lowercase]
-EXPLANATION: [Clear 1-sentence explanation]
+HINT: [2-4 word hint]
+ANSWER: [one word lowercase]
+EXPLANATION: [1 sentence]
 
-Example format:
+Example:
 RIDDLE: What has keys but can't open locks?
 HINT: Musical instrument
 ANSWER: piano
 EXPLANATION: A piano has keys for playing music, not for opening doors.
 
-Now create a NEW riddle following this exact format:";
+Create a NEW riddle now:";
         
         $debugLog['prompt_length'] = strlen($prompt);
+        $debugLog['prompt_tokens_approx'] = ceil(strlen($prompt) / 4);
         
-        // ========== MAKE API CALL WITH BETTER CONFIG ==========
-        try {
-            $response = Http::withoutVerifying()
-                ->timeout(45) // Increased timeout
-                ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
-                    'contents' => [[
-                        'parts' => [['text' => $prompt]]
-                    ]],
-                    'generationConfig' => [
-                        'temperature' => 0.7, // Lower for more consistent formatting
-                        'maxOutputTokens' => 300, // Reduced for shorter, consistent responses
-                        'topP' => 0.8,
-                    ]
-                ]);
-
-            $debugLog['response_status'] = $response->status();
+        // ========== MAKE API CALL WITH OPTIMIZED CONFIG ==========
+        $maxRetries = 3;
+        $attempt = 0;
+        $aiText = '';
+        
+        while ($attempt < $maxRetries) {
+            $attempt++;
+            Log::info("API attempt {$attempt}/{$maxRetries} with gemini-2.5-flash");
             
-            if ($response->successful()) {
-                $data = $response->json();
-                $debugLog['finish_reason'] = $data['candidates'][0]['finishReason'] ?? 'unknown';
-                $debugLog['total_tokens'] = $data['usageMetadata']['totalTokenCount'] ?? 0;
-                
-                $aiText = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
-                $debugLog['ai_text_raw'] = $aiText;
-                $debugLog['ai_text_length'] = strlen($aiText);
-                
-                if (!empty($aiText)) {
-                    // Parse with ROBUST parser
-                    $parsed = $this->parseRiddleResponseRobust($aiText);
-                    
-                    if ($parsed['success']) {
-                        // Check for duplicate answer
-                        $answer = strtolower(trim($parsed['answer']));
-                        
-                        // Check if answer is valid (not empty, not "at", etc.)
-                        if (strlen($answer) < 2) {
-                            $debugLog['invalid_answer'] = $answer;
-                            Log::warning("AI generated invalid answer: {$answer}");
-                            return $this->saveAndReturnVariedFallback($existingAnswers, $debugLog, $cacheKey, $selectedTheme);
-                        }
-                        
-                        if (!in_array($answer, $existingAnswers)) {
-                            // Save AI riddle
-                            $riddle = Riddle::create([
-                                'question' => $parsed['question'],
-                                'hint' => $parsed['hint'],
-                                'answer' => $answer,
-                                'explanation' => $parsed['explanation'],
-                                'source' => 'gemini_ai'
-                            ]);
-                            
-                            // Cache the AI result
-                            $cacheData = [
-                                'ai_generated' => true,
-                                'data' => [
-                                    'id' => $riddle->id,
-                                    'question' => $riddle->question,
-                                    'hint' => $riddle->hint,
-                                    'answer' => $riddle->answer,
-                                    'explanation' => $riddle->explanation,
-                                    'source' => $riddle->source,
-                                    'theme' => $selectedTheme
-                                ]
-                            ];
-                            
-                            Cache::put($cacheKey, $cacheData, now()->addDay());
-                            
-                            Log::info("✅ AI riddle success", [
-                                'id' => $riddle->id,
-                                'answer' => $answer,
-                                'theme' => $selectedTheme,
-                                'has_explanation' => !empty($parsed['explanation'])
-                            ]);
+            try {
+                // CRITICAL CHANGE: Using gemini-2.5-flash with optimized settings
+                $response = Http::withoutVerifying()
+                    ->timeout(45)
+                    ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
+                        'contents' => [[
+                            'parts' => [['text' => $prompt]]
+                        ]],
+                        'generationConfig' => [
+                            'temperature' => 0.8, // Slightly higher for creativity
+                            'maxOutputTokens' => 1500, // Increased for better responses
+                            'topP' => 0.9,
+                            'topK' => 40,
+                        ],
+                        'safetySettings' => [
+                            [
+                                'category' => 'HARM_CATEGORY_HARASSMENT',
+                                'threshold' => 'BLOCK_NONE'
+                            ],
+                            [
+                                'category' => 'HARM_CATEGORY_HATE_SPEECH',
+                                'threshold' => 'BLOCK_NONE'
+                            ],
+                            [
+                                'category' => 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                                'threshold' => 'BLOCK_NONE'
+                            ],
+                            [
+                                'category' => 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                                'threshold' => 'BLOCK_NONE'
+                            ]
+                        ]
+                    ]);
 
-                            return response()->json([
-                                'success' => true,
-                                'ai_generated' => true,
-                                'unique' => true,
-                                'message' => 'AI riddle generated successfully!',
-                                'data' => $cacheData['data'],
-                                'theme' => $selectedTheme
-                            ]);
-                            
-                        } else {
-                            $debugLog['duplicate_answer'] = $answer;
-                            Log::warning("AI generated duplicate answer: {$answer}");
-                            return $this->saveAndReturnVariedFallback($existingAnswers, $debugLog, $cacheKey, $selectedTheme);
+                $debugLog['response_status'] = $response->status();
+                
+                if ($response->successful()) {
+                    $data = $response->json();
+                    $debugLog['model_version'] = $data['modelVersion'] ?? 'unknown';
+                    $finishReason = $data['candidates'][0]['finishReason'] ?? 'unknown';
+                    $debugLog['finish_reason'] = $finishReason;
+                    $debugLog['total_tokens'] = $data['usageMetadata']['totalTokenCount'] ?? 0;
+                    $debugLog['prompt_tokens'] = $data['usageMetadata']['promptTokenCount'] ?? 0;
+                    
+                    $aiText = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+                    
+                    Log::info("Attempt {$attempt}: Finish Reason = {$finishReason}, Text Length = " . strlen($aiText));
+                    
+                    // Check if we got a valid response
+                    if ($finishReason === 'STOP' && !empty($aiText)) {
+                        // Success! Break the retry loop
+                        $debugLog['ai_text_raw'] = substr($aiText, 0, 200);
+                        $debugLog['ai_text_length'] = strlen($aiText);
+                        Log::info("✅ Valid AI response received on attempt {$attempt}");
+                        break;
+                    } elseif ($finishReason === 'MAX_TOKENS') {
+                        Log::warning("MAX_TOKENS on attempt {$attempt} - tokens used: " . ($data['usageMetadata']['totalTokenCount'] ?? 0));
+                        if ($attempt < $maxRetries) {
+                            sleep(1);
+                            continue;
                         }
-                        
-                    } else {
-                        $debugLog['parse_error'] = $parsed['error'];
-                        Log::warning("Parse error: " . $parsed['error']);
-                        return $this->saveAndReturnVariedFallback($existingAnswers, $debugLog, $cacheKey, $selectedTheme);
+                    } elseif ($finishReason === 'SAFETY' || $finishReason === 'RECITATION') {
+                        Log::warning("Safety/recitation block on attempt {$attempt}");
+                        if ($attempt < $maxRetries) {
+                            // Try with different theme
+                            $selectedTheme = $themeKeys[array_rand($themeKeys)];
+                            $themeInstruction = $themes[$selectedTheme];
+                            $prompt = str_replace($themes[$selectedTheme], $themeInstruction, $prompt);
+                            Log::info("Switched theme to: {$selectedTheme}");
+                            sleep(1);
+                            continue;
+                        }
+                    } elseif (empty($aiText)) {
+                        Log::warning("Empty response on attempt {$attempt}");
+                        if ($attempt < $maxRetries) {
+                            sleep(2);
+                            continue;
+                        }
+                    }
+                } else {
+                    $error = $response->json();
+                    $debugLog['api_error'] = $error['error']['message'] ?? 'Unknown error';
+                    $debugLog['status_code'] = $response->status();
+                    
+                    Log::error("API error on attempt {$attempt}", ['error' => $debugLog['api_error']]);
+                    
+                    // Check for specific errors
+                    if (str_contains($debugLog['api_error'] ?? '', 'quota') || $response->status() === 429) {
+                        Log::error("API quota exceeded - stopping retries");
+                        break;
                     }
                     
+                    if ($attempt < $maxRetries) {
+                        sleep(3);
+                        continue;
+                    }
+                }
+            } catch (\Exception $e) {
+                $debugLog['exception'] = $e->getMessage();
+                Log::error("Exception on attempt {$attempt}", ['error' => $e->getMessage()]);
+                
+                if ($attempt < $maxRetries) {
+                    sleep(2);
+                    continue;
+                }
+            }
+        }
+        
+        // ========== PROCESS AI RESPONSE ==========
+        if (!empty($aiText)) {
+            // Parse the AI response
+            $parsed = $this->parseRiddleResponseRobust($aiText);
+            
+            if ($parsed['success']) {
+                // Check for duplicate answer
+                $answer = strtolower(trim($parsed['answer']));
+                
+                // Check if answer is valid
+                if (strlen($answer) < 2) {
+                    Log::warning("AI generated invalid answer: {$answer}");
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'AI generated invalid answer',
+                        'error_code' => 'INVALID_ANSWER',
+                        'debug' => $debugLog
+                    ], 422);
+                }
+                
+                if (!in_array($answer, $existingAnswers)) {
+                    // Save AI riddle
+                    $riddle = Riddle::create([
+                        'question' => $parsed['question'],
+                        'hint' => $parsed['hint'],
+                        'answer' => $answer,
+                        'explanation' => $parsed['explanation'],
+                        'source' => 'gemini_ai'
+                    ]);
+                    
+                    // Cache the AI result
+                    $cacheData = [
+                        'ai_generated' => true,
+                        'data' => [
+                            'id' => $riddle->id,
+                            'question' => $riddle->question,
+                            'hint' => $riddle->hint,
+                            'answer' => $riddle->answer,
+                            'explanation' => $riddle->explanation,
+                            'source' => $riddle->source,
+                            'theme' => $selectedTheme
+                        ]
+                    ];
+                    
+                    Cache::put($cacheKey, $cacheData, now()->addDay());
+                    
+                    Log::info("✅ AI riddle success - gemini-2.5-flash", [
+                        'id' => $riddle->id,
+                        'answer' => $answer,
+                        'theme' => $selectedTheme,
+                        'attempts' => $attempt,
+                        'tokens_used' => $debugLog['total_tokens'] ?? 0
+                    ]);
+
+                    return response()->json([
+                        'success' => true,
+                        'ai_generated' => true,
+                        'unique' => true,
+                        'attempts' => $attempt,
+                        'model' => 'gemini-2.5-flash',
+                        'message' => 'AI riddle generated successfully!',
+                        'data' => $cacheData['data'],
+                        'theme' => $selectedTheme
+                    ]);
+                    
                 } else {
-                    $debugLog['empty_response'] = true;
-                    return $this->saveAndReturnVariedFallback($existingAnswers, $debugLog, $cacheKey, $selectedTheme);
+                    Log::warning("AI generated duplicate answer: {$answer}");
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'AI generated duplicate answer',
+                        'error_code' => 'DUPLICATE_ANSWER',
+                        'answer' => $answer,
+                        'debug' => $debugLog
+                    ], 422);
                 }
                 
             } else {
-                $error = $response->json();
-                $debugLog['api_error'] = $error['error']['message'] ?? 'Unknown error';
-                $debugLog['status_code'] = $response->status();
-                
-                // Check if it's quota error
-                if ($response->status() === 429 || str_contains($debugLog['api_error'], 'quota')) {
-                    $debugLog['quota_exceeded'] = true;
-                    Log::warning("API quota exceeded, using fallback");
-                }
-                
-                Log::error("API error", $debugLog);
-                return $this->saveAndReturnVariedFallback($existingAnswers, $debugLog, $cacheKey, $selectedTheme);
+                Log::warning("Parse error: " . $parsed['error']);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to parse AI response',
+                    'error_code' => 'PARSE_ERROR',
+                    'error' => $parsed['error'],
+                    'debug' => $debugLog,
+                    'ai_text_preview' => substr($aiText, 0, 200)
+                ], 422);
             }
             
-        } catch (\Exception $e) {
-            $debugLog['exception'] = $e->getMessage();
-            Log::error("Exception", $debugLog);
-            return $this->saveAndReturnVariedFallback($existingAnswers, $debugLog, $cacheKey, $selectedTheme);
+        } else {
+            // All retries failed
+            Log::error("All {$maxRetries} attempts failed to get valid AI response", $debugLog);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to generate AI riddle after ' . $maxRetries . ' attempts',
+                'error_code' => 'AI_GENERATION_FAILED',
+                'debug' => $debugLog,
+                'model' => 'gemini-2.5-flash'
+            ], 503);
         }
     }
     
@@ -405,258 +501,14 @@ Now create a NEW riddle following this exact format:";
             return [
                 'success' => false, 
                 'error' => 'Missing question or answer',
-                'data' => $result
+                'data' => $result,
+                'raw_lines' => $lines
             ];
         }
         
         return ['success' => true] + $result;
     }
     
-    /**
-     * Save and return VARIED fallback (multiple themes)
-     */
-    private function saveAndReturnVariedFallback(array $existingAnswers, array $debugLog, string $cacheKey, string $theme)
-    {
-        // EXTENSIVE collection of riddles across ALL themes
-        $allRiddles = [
-            // Animals theme
-            [
-                'question' => "I wear my house upon my back, a spiral shell, a winding track. I leave a silver trail behind, my pace is slow, you will find. What am I?",
-                'hint' => 'Mollusk',
-                'answer' => 'snail',
-                'explanation' => 'A snail carries its shell (house), leaves a slimy trail, and moves very slowly.',
-                'source' => 'unique_fallback',
-                'theme' => 'animals'
-            ],
-            [
-                'question' => "I sleep during the day, fly at night. My vision is special, I use sound as sight. What am I?",
-                'hint' => 'Nocturnal mammal',
-                'answer' => 'bat',
-                'explanation' => 'Bats are nocturnal, use echolocation to navigate, and sleep upside down.',
-                'source' => 'unique_fallback',
-                'theme' => 'animals'
-            ],
-            
-            // Objects theme
-            [
-                'question' => "I have keys but open no locks, space but no room, you can enter but not go inside. What am I?",
-                'hint' => 'Used for typing',
-                'answer' => 'keyboard',
-                'explanation' => 'A keyboard has keys (letters), space bar, and you "enter" data with it.',
-                'source' => 'unique_fallback',
-                'theme' => 'objects'
-            ],
-            [
-                'question' => "I have hands but cannot clap, a face but no eyes. I tell but cannot speak. What am I?",
-                'hint' => 'Tells time',
-                'answer' => 'clock',
-                'explanation' => 'A clock has hands (hour/minute), a face (dial), and tells time without speaking.',
-                'source' => 'unique_fallback',
-                'theme' => 'objects'
-            ],
-            
-            // Nature theme
-            [
-                'question' => "I fall from the sky but never get wet, I disappear when I touch the ground. What am I?",
-                'hint' => 'Winter weather',
-                'answer' => 'snowflake',
-                'explanation' => 'Snowflakes fall from clouds, are made of ice (not wet), and melt when touching warm ground.',
-                'source' => 'unique_fallback',
-                'theme' => 'nature'
-            ],
-            [
-                'question' => "I have roots that nobody sees, taller than trees. Up, up I go, yet I never grow. What am I?",
-                'hint' => 'Natural formation',
-                'answer' => 'mountain',
-                'explanation' => 'Mountains have underground roots (geological), are tall, and don\'t grow like living things.',
-                'source' => 'unique_fallback',
-                'theme' => 'nature'
-            ],
-            
-            // Food theme
-            [
-                'question' => "I am taken from a mine and shut in a wooden case, from which I am never released, and yet I am used by almost every person. What am I?",
-                'hint' => 'Writing tool',
-                'answer' => 'pencil',
-                'explanation' => 'Pencil lead comes from graphite mines, is encased in wood, and is used until gone.',
-                'source' => 'unique_fallback',
-                'theme' => 'food'
-            ],
-            [
-                'question' => "What has a heart that doesn't beat?",
-                'hint' => 'Vegetable',
-                'answer' => 'artichoke',
-                'explanation' => 'An artichoke has a heart (the tender center) but is a vegetable, not a living creature.',
-                'source' => 'unique_fallback',
-                'theme' => 'food'
-            ],
-            
-            // Technology theme
-            [
-                'question' => "I have a screen but no TV, keys but no locks, memory but no brain. What am I?",
-                'hint' => 'Electronic device',
-                'answer' => 'computer',
-                'explanation' => 'A computer has a screen, keyboard keys, memory (RAM), but is not a living being.',
-                'source' => 'unique_fallback',
-                'theme' => 'technology'
-            ],
-            [
-                'question' => "I can connect you to anyone, anywhere, without wires or cables. I fit in your pocket but hold the world. What am I?",
-                'hint' => 'Mobile device',
-                'answer' => 'smartphone',
-                'explanation' => 'A smartphone allows wireless communication, is pocket-sized, and provides global information access.',
-                'source' => 'unique_fallback',
-                'theme' => 'technology'
-            ],
-            
-            // Body theme
-            [
-                'question' => "The more of me you take, the more you leave behind. What am I?",
-                'hint' => 'Related to walking',
-                'answer' => 'footsteps',
-                'explanation' => 'When you take footsteps, you leave more footsteps behind you as you walk.',
-                'source' => 'unique_fallback',
-                'theme' => 'body'
-            ],
-            [
-                'question' => "I have a head and a tail, but no body. What am I?",
-                'hint' => 'Can be flipped',
-                'answer' => 'coin',
-                'explanation' => 'A coin has a head (front design) and tail (back design) but no actual body.',
-                'source' => 'unique_fallback',
-                'theme' => 'body'
-            ],
-            
-            // Time theme
-            [
-                'question' => "I am always coming but never arrive. What am I?",
-                'hint' => 'Future moment',
-                'answer' => 'tomorrow',
-                'explanation' => 'Tomorrow is always in the future, always "coming" but when it arrives it becomes today.',
-                'source' => 'unique_fallback',
-                'theme' => 'time'
-            ],
-            [
-                'question' => "What flies without wings, cries without eyes?",
-                'hint' => 'Weather phenomenon',
-                'answer' => 'cloud',
-                'explanation' => 'Clouds move ("fly") in the sky and produce rain ("cry") without biological features.',
-                'source' => 'unique_fallback',
-                'theme' => 'time'
-            ]
-        ];
-        
-        // Filter by theme first, then remove duplicates
-        $themeRiddles = array_filter($allRiddles, function($riddle) use ($theme) {
-            return $riddle['theme'] === $theme;
-        });
-        
-        // If no theme-specific riddles, use all
-        if (empty($themeRiddles)) {
-            $themeRiddles = $allRiddles;
-        }
-        
-        // Filter out duplicates
-        $available = array_filter($themeRiddles, function($riddle) use ($existingAnswers) {
-            return !in_array($riddle['answer'], $existingAnswers);
-        });
-        
-        if (count($available) > 0) {
-            $fallbackData = $available[array_rand($available)];
-            $isUnique = true;
-        } else {
-            // All are duplicates, pick least used theme or random
-            $fallbackData = $themeRiddles[array_rand($themeRiddles)];
-            $isUnique = false;
-        }
-        
-        // Save to database
-        $riddle = Riddle::create([
-            'question' => $fallbackData['question'],
-            'hint' => $fallbackData['hint'],
-            'answer' => $fallbackData['answer'],
-            'explanation' => $fallbackData['explanation'],
-            'source' => $fallbackData['source']
-        ]);
-        
-        // Cache the fallback result
-        $cacheData = [
-            'ai_generated' => false,
-            'data' => [
-                'id' => $riddle->id,
-                'question' => $riddle->question,
-                'hint' => $riddle->hint,
-                'answer' => $riddle->answer,
-                'explanation' => $riddle->explanation,
-                'source' => $riddle->source,
-                'theme' => $fallbackData['theme']
-            ]
-        ];
-        
-        Cache::put($cacheKey, $cacheData, now()->addDay());
-        
-        Log::info("Using fallback riddle", [
-            'theme' => $fallbackData['theme'],
-            'answer' => $fallbackData['answer'],
-            'unique' => $isUnique
-        ]);
-        
-        return response()->json([
-            'success' => true,
-            'ai_generated' => false,
-            'fallback' => true,
-            'unique' => $isUnique,
-            'message' => $isUnique ? "Using unique {$fallbackData['theme']} riddle" : "Using {$fallbackData['theme']} riddle",
-            'data' => $cacheData['data'],
-            'theme' => $fallbackData['theme']
-        ]);
-    }
-    
-    /**
-     * Fallback for no API key
-     */
-    private function saveAndReturnFallback(string $reason, array $debugLog, string $cacheKey)
-    {
-        $fallback = [
-            'question' => "What has keys but can't open locks?",
-            'hint' => 'Musical instrument',
-            'answer' => 'piano',
-            'explanation' => 'A piano has keys for playing music, not for opening doors.',
-            'source' => 'system_fallback',
-            'theme' => 'objects'
-        ];
-        
-        $riddle = Riddle::create([
-            'question' => $fallback['question'],
-            'hint' => $fallback['hint'],
-            'answer' => $fallback['answer'],
-            'explanation' => $fallback['explanation'],
-            'source' => $fallback['source']
-        ]);
-        
-        $cacheData = [
-            'ai_generated' => false,
-            'data' => [
-                'id' => $riddle->id,
-                'question' => $fallback['question'],
-                'hint' => $fallback['hint'],
-                'answer' => $fallback['answer'],
-                'explanation' => $fallback['explanation'],
-                'source' => $fallback['source'],
-                'theme' => $fallback['theme']
-            ]
-        ];
-        
-        Cache::put($cacheKey, $cacheData, now()->addDay());
-        
-        return response()->json([
-            'success' => true,
-            'ai_generated' => false,
-            'fallback' => true,
-            'message' => 'System fallback riddle',
-            'data' => $cacheData['data']
-        ]);
-    }
     /**
      * Get statistics about riddles
      */
@@ -715,5 +567,63 @@ Now create a NEW riddle following this exact format:";
             'message' => $wasCached ? 'Cache cleared. Next AI call allowed.' : 'No cache to clear.',
             'next_ai_call' => 'allowed now'
         ]);
+    }
+    
+    /**
+     * TEST ENDPOINT - for debugging AI API
+     */
+    public function testAIApi(Request $request)
+    {
+        $apiKey = env('GEMINI_API_KEY');
+        
+        if (!$apiKey) {
+            return response()->json([
+                'success' => false,
+                'error' => 'No API key configured'
+            ], 500);
+        }
+        
+        // Use a simpler prompt for testing
+        $testPrompt = "Create a short riddle about an animal. Answer must be one word. Format: RIDDLE: [question] HINT: [hint] ANSWER: [answer] EXPLANATION: [explanation]";
+        
+        try {
+            $response = Http::withoutVerifying()
+                ->timeout(30)
+                ->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}", [
+                    'contents' => [[
+                        'parts' => [['text' => $testPrompt]]
+                    ]],
+                    'generationConfig' => [
+                        'temperature' => 0.7,
+                        'maxOutputTokens' => 500,
+                    ]
+                ]);
+            
+            if ($response->successful()) {
+                $data = $response->json();
+                return response()->json([
+                    'success' => true,
+                    'model' => 'gemini-2.5-flash',
+                    'finish_reason' => $data['candidates'][0]['finishReason'] ?? 'unknown',
+                    'has_text' => isset($data['candidates'][0]['content']['parts'][0]['text']),
+                    'text' => $data['candidates'][0]['content']['parts'][0]['text'] ?? 'No text',
+                    'usage' => $data['usageMetadata'] ?? [],
+                    'model_version' => $data['modelVersion'] ?? 'unknown'
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'model' => 'gemini-2.5-flash',
+                    'status' => $response->status(),
+                    'error' => $response->body()
+                ]);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'model' => 'gemini-2.5-flash',
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 }
