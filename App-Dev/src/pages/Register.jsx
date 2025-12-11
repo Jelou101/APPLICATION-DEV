@@ -9,6 +9,7 @@ const Register = () => {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const API_BASE = import.meta.env.VITE_API_URL || "";
 
   const registerPost = async () => {
     if (password !== confirm) {
@@ -31,7 +32,7 @@ const Register = () => {
     setMessage("");
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/register', {
+      const response = await fetch(`${API_BASE}/api/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
