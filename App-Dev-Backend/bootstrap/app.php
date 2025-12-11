@@ -12,6 +12,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Add CORS middleware to all requests
+        $middleware->prepend(\App\Http\Middleware\HandleCors::class);
+
         // Add Sanctum middleware to API group
         $middleware->api(prepend: [
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
